@@ -86,7 +86,7 @@ def create_replay(batch_size: int, timesteps: int,
     ])
 
     extra_replay_elements = [
-        ReplayElement('demo', (), np.bool),
+        ReplayElement('demo', (), np.bool_),
     ]
 
     replay_buffer = TaskUniformReplayBuffer(
@@ -143,6 +143,7 @@ def _get_action(
     return trans_indicies, rot_and_grip_indicies, ignore_collisions, np.concatenate(
         [obs_tp1.gripper_pose, np.array([grip])]), attention_coordinates
 
+import time  # 引入 time 模块
 
 def _add_keypoints_to_replay(
         cfg: DictConfig,
@@ -163,11 +164,19 @@ def _add_keypoints_to_replay(
     prev_action = None
     obs = inital_obs
     for k, keypoint in enumerate(episode_keypoints):
+        # print(f"\n=== Keypoint {k + 1}/{len(episode_keypoints)} ===")  # 打印当前关键帧进度
         obs_tp1 = demo[keypoint]
         obs_tm1 = demo[max(0, keypoint - 1)]
         trans_indicies, rot_grip_indicies, ignore_collisions, action, attention_coordinates = _get_action(
             obs_tp1, obs_tm1, rlbench_scene_bounds, voxel_sizes, bounds_offset,
             rotation_resolution, crop_augmentation)
+
+        # 打印数据类型和shape
+        # print(f"Trans Indices Type: {type(trans_indicies)}, Shape: {len(trans_indicies)}")
+        # print(f"Rot Grip Indices Type: {type(rot_grip_indicies)}, Shape: {len(rot_grip_indicies)}")
+        # print(f"Ignore Collisions Type: {type(ignore_collisions)}")
+        # print(f"Action Type: {type(action)}, Shape: {action.shape}")
+        # print(f"Attention Coordinates Type: {type(attention_coordinates)}, Shape: {len(attention_coordinates)}")
 
         terminal = (k == len(episode_keypoints) - 1)
         reward = float(terminal) * REWARD_SCALE if terminal else 0
@@ -180,6 +189,10 @@ def _add_keypoints_to_replay(
         obs_dict['lang_goal_emb'] = sentence_emb[0].float().detach().cpu().numpy()
         obs_dict['lang_token_embs'] = token_embs[0].float().detach().cpu().numpy()
 
+        # 打印数据类型和shape
+        # print(f"Lang Goal Embedding Type: {type(sentence_emb)}, Shape: {sentence_emb.shape}")
+        # print(f"Lang Token Embeddings Type: {type(token_embs)}, Shape: {token_embs.shape}")
+
         prev_action = np.copy(action)
 
         others = {'demo': True}
@@ -191,12 +204,20 @@ def _add_keypoints_to_replay(
             'lang_goal': np.array([description], dtype=object),
         }
 
+        # 打印数据类型和shape
+        # print(f"Final Observation Trans Indices Type: {type(final_obs['trans_action_indicies'])}, Shape: {len(final_obs['trans_action_indicies'])}")
+        # print(f"Final Observation Rot Grip Indices Type: {type(final_obs['rot_grip_action_indicies'])}, Shape: {len(final_obs['rot_grip_action_indicies'])}")
+        # print(f"Final Observation Gripper Pose Type: {type(final_obs['gripper_pose'])}, Shape: {final_obs['gripper_pose'].shape}")
+        # print(f"Final Observation Lang Goal Type: {type(final_obs['lang_goal'])}, Shape: {final_obs['lang_goal'].shape}")
+
         others.update(final_obs)
         others.update(obs_dict)
 
         timeout = False
         replay.add(action, reward, terminal, timeout, **others)
         obs = obs_tp1
+
+        # time.sleep(10)  # 每次循环后休眠10秒，避免打印信息过多导致混乱
 
     # final step
     obs_dict_tp1 = utils.extract_obs(obs_tp1, t=k + 1, prev_action=prev_action,

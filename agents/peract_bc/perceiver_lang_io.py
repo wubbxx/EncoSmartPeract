@@ -92,6 +92,13 @@ class FeedForward(nn.Module):
 
 class Attention(nn.Module):
     def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0.0):
+        #              512        128               1        64           0.1
+        # latent_dim: 512, input_dim_before_seq: 128, heads: 1, dim_head: 64, dropout: 0.1
+        # Attention(latent_dim,
+        #   self.input_dim_before_seq,
+        #   heads=cross_heads,
+        #   dim_head=cross_dim_head,
+        #   dropout=input_dropout)
         super().__init__()
         inner_dim = dim_head * heads
         context_dim = default(context_dim, query_dim)
@@ -248,6 +255,13 @@ class PerceiverVoxelLangEncoder(nn.Module):
         self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         # encoder cross attention
+        # 打印 cross_attend_blocks 中 Attention 和 FeedForward 的输入参数信息
+        print(f"Attention - latent_dim: {latent_dim}, "
+            f"input_dim_before_seq: {self.input_dim_before_seq}, "
+            f"heads: {cross_heads}, dim_head: {cross_dim_head}, dropout: {input_dropout}")
+        print(f"FeedForward - latent_dim: {latent_dim}")
+
+        # 定义 cross_attend_blocks
         self.cross_attend_blocks = nn.ModuleList([
             PreNorm(latent_dim, Attention(latent_dim,
                                           self.input_dim_before_seq,
@@ -347,11 +361,11 @@ class PerceiverVoxelLangEncoder(nn.Module):
     ):
         # preprocess input
         d0 = self.input_preprocess(ins)                       # [B,10,100,100,100] -> [B,64,100,100,100]
-
+        # 64个卷积核
         # aggregated features from 1st softmax and maxpool for MLP decoders
         feats = [self.ss0(d0.contiguous()), self.global_maxp(d0).view(ins.shape[0], -1)]
-
-        # patchify input (5x5x5 patches)
+        print(f"Feature list shape after aggregation: {[f.shape for f in feats]}")
+        # patchify input (5x5x5 patches) 将体素网格划分为大小为 5x5x5 的patch
         ins = self.patchify(d0)                               # [B,64,100,100,100] -> [B,64,20,20,20]
 
         b, c, d, h, w, device = *ins.shape, ins.device
@@ -359,7 +373,8 @@ class PerceiverVoxelLangEncoder(nn.Module):
         assert len(axis) == self.input_axis, 'input must have the same number of axis as input_axis'
 
         # concat proprio
-        if self.low_dim_size > 0:
+        if self.low_dim_size > 0: # proprio 就是 replay_sample['low_dim_state']
+            # proprio_preprocess 全连接层 (linear layer)
             p = self.proprio_preprocess(proprio)              # [B,4] -> [B,64]
             p = p.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).repeat(1, 1, d, h, w)
             ins = torch.cat([ins, p], dim=1)                  # [B,128,20,20,20]
@@ -415,57 +430,89 @@ class PerceiverVoxelLangEncoder(nn.Module):
 
         # batchify latents
         x = repeat(self.latents, 'n d -> b n d', b=b)
-
+        ################
         cross_attn, cross_ff = self.cross_attend_blocks
 
         for it in range(self.iterations):
             # encoder cross attention
+            # print(f"Iteration {it}: x shape before cross_attn: {x.shape}")
             x = cross_attn(x, context=ins, mask=mask) + x
+            # print(f"Iteration {it}: x shape after cross_attn: {x.shape}")
+
             x = cross_ff(x) + x
+            # print(f"Iteration {it}: x shape after cross_ff: {x.shape}")
 
             # self-attention layers
             for self_attn, self_ff in self.layers:
+                # print(f"x shape before self_attn: {x.shape}")
                 x = self_attn(x) + x
-                x = self_ff(x) + x
+                # print(f"x shape after self_attn: {x.shape}")
 
+                x = self_ff(x) + x
+                # print(f"x shape after self_ff: {x.shape}")
+        # shape 都是 [1, 2048, 512]
         # decoder cross attention
+        print(f"x shape before decoder cross attention: {x.shape}")
         latents = self.decoder_cross_attn(ins, context=x)
+        print(f"Latents shape after decoder cross attention: {latents.shape}")
 
         # crop out the language part of the output sequence
         if self.lang_fusion_type == 'seq':
+            print(f"Latents shape before cropping: {latents.shape}")
             latents = latents[:, l.shape[1]:]
+            print(f"Latents shape after cropping: {latents.shape}")
 
         # reshape back to voxel grid
+        queries_orig_shape = (b, 20, 20, 20, latents.shape[-1])  # Assuming original shape [B,20,20,20,64]
+        print(f"Latents shape before reshaping: {latents.shape}")
         latents = latents.view(b, *queries_orig_shape[1:-1], latents.shape[-1]) # [B,20,20,20,64]
+        print(f"Latents shape after reshaping: {latents.shape}")
         latents = rearrange(latents, 'b ... d -> b d ...')                      # [B,64,20,20,20]
+        print(f"Latents shape after rearranging: {latents.shape}")
 
         # aggregated features from 2nd softmax and maxpool for MLP decoders
         feats.extend([self.ss1(latents.contiguous()), self.global_maxp(latents).view(b, -1)])
+        print(f"Feature list shape after aggregation: {[f.shape for f in feats]}")
 
         # upsample
+        print(f"Latents shape before upsample: {latents.shape}")
         u0 = self.up0(latents)
+        print(f"u0 shape after upsample: {u0.shape}")
 
         # ablations
         if self.no_skip_connection:
+            # print(f"Skip connection disabled, u0 shape: {u0.shape}")
             u = self.final(u0)
         elif self.no_perceiver:
+            # print(f"Perceiver disabled, d0 shape: {d0.shape}")
             u = self.final(d0)
         else:
+            print(f"Both perceiver and skip connection enabled, concatenating d0 and u0. d0 shape: {d0.shape}, u0 shape: {u0.shape}")
             u = self.final(torch.cat([d0, u0], dim=1))
+        print(f"u shape after final layer: {u.shape}")
 
         # translation decoder
         trans = self.trans_decoder(u)
+        print(f"Trans shape after translation decoder: {trans.shape}")
 
         # rotation, gripper, and collision MLPs
         rot_and_grip_out = None
         if self.num_rotation_classes > 0:
             feats.extend([self.ss_final(u.contiguous()), self.global_maxp(u).view(b, -1)])
+            print(f"Feature list shape before dense layers: {[f.shape for f in feats]}")
 
             dense0 = self.dense0(torch.cat(feats, dim=1))
+            print(f"dense0 shape: {dense0.shape}")
+
             dense1 = self.dense1(dense0)                     # [B,72*3+2+2]
+            print(f"dense1 shape: {dense1.shape}")
 
             rot_and_grip_collision_out = self.rot_grip_collision_ff(dense1)
+            print(f"rot_and_grip_collision_out shape: {rot_and_grip_collision_out.shape}")
+
             rot_and_grip_out = rot_and_grip_collision_out[:, :-self.num_collision_classes]
             collision_out = rot_and_grip_collision_out[:, -self.num_collision_classes:]
+            print(f"rot_and_grip_out shape: {rot_and_grip_out.shape}")
+            print(f"collision_out shape: {collision_out.shape}")
 
         return trans, rot_and_grip_out, collision_out

@@ -795,15 +795,27 @@ class SpatialSoftmax3D(torch.nn.Module):
         self.register_buffer('pos_z', pos_z)
 
     def forward(self, feature):
-        feature = feature.view(
-            -1, self.height * self.width * self.depth)  # (B, c*d*h*w)
+        # print(f"Input feature shape: {feature.shape}")  # 输入特征的形状
+
+        feature = feature.view(-1, self.height * self.width * self.depth)  # (B, c*d*h*w)
+        # print(f"After view shape: {feature.shape}")  # 展平后的形状
+
         softmax_attention = F.softmax(feature / self.temperature, dim=-1)
-        expected_x = torch.sum(self.pos_x * softmax_attention, dim=1,
-                               keepdim=True)
-        expected_y = torch.sum(self.pos_y * softmax_attention, dim=1,
-                               keepdim=True)
-        expected_z = torch.sum(self.pos_z * softmax_attention, dim=1,
-                               keepdim=True)
+        # print(f"Softmax attention shape: {softmax_attention.shape}")  # softmax 后的形状
+
+        expected_x = torch.sum(self.pos_x * softmax_attention, dim=1, keepdim=True)
+        # print(f"Expected x shape: {expected_x.shape}")  # 期望 x 位置的形状
+
+        expected_y = torch.sum(self.pos_y * softmax_attention, dim=1, keepdim=True)
+        # print(f"Expected y shape: {expected_y.shape}")  # 期望 y 位置的形状
+
+        expected_z = torch.sum(self.pos_z * softmax_attention, dim=1, keepdim=True)
+        # print(f"Expected z shape: {expected_z.shape}")  # 期望 z 位置的形状
+
         expected_xy = torch.cat([expected_x, expected_y, expected_z], 1)
+        # print(f"Expected XY shape: {expected_xy.shape}")  # 合并后的形状
+
         feature_keypoints = expected_xy.view(-1, self.channel * 3)
+        # print(f"Feature keypoints shape: {feature_keypoints.shape}")  # 最终输出的形状
+
         return feature_keypoints

@@ -1,0 +1,8 @@
+__pycache__
+sd-v1-3.ckpt
+tmp/
+.vscode/
+=5.1
+logs/
+outputs/
+RLBench/tests/

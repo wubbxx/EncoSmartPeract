@@ -145,55 +145,74 @@ class VoxelGrid(nn.Module):
             out=torch.zeros_like(self._flat_output))
         return flat_scatter.view(self._total_dims_list)
 
-    def coords_to_bounding_voxel_grid(self, coords, coord_features=None,
-                                      coord_bounds=None):
+    def coords_to_bounding_voxel_grid(self, coords, coord_features=None, coord_bounds=None):
+        # print(f"Initial coords shape: {coords.shape}")
+        # if coord_features is not None:
+        #     print(f"Initial coord_features shape: {coord_features.shape}")
+        # if coord_bounds is not None:
+        #     print(f"Initial coord_bounds shape: {coord_bounds.shape}")
+            
         voxel_indicy_denmominator = self._voxel_indicy_denmominator
         res, bb_mins = self._res, self._bb_mins
+        # print(f"Initial res: {res}, Initial bb_mins: {bb_mins}")
+        
         if coord_bounds is not None:
             bb_mins = coord_bounds[..., 0:3]
             bb_maxs = coord_bounds[..., 3:6]
             bb_ranges = bb_maxs - bb_mins
             res = bb_ranges / (self._dims_orig.float() + MIN_DENOMINATOR)
             voxel_indicy_denmominator = res + MIN_DENOMINATOR
-
+            # print(f"Adjusted bb_mins: {bb_mins.shape}, bb_maxs: {bb_maxs.shape}, bb_ranges: {bb_ranges.shape}")
+            # print(f"Adjusted res: {res.shape}, Adjusted voxel_indicy_denmominator: {voxel_indicy_denmominator.shape}")
+        
         bb_mins_shifted = bb_mins - res  # shift back by one
-        floor = torch.floor(
-            (coords - bb_mins_shifted.unsqueeze(1)) / voxel_indicy_denmominator.unsqueeze(1)).int()
+        # print(f"Shifted bb_mins: {bb_mins_shifted.shape}")
+        
+        floor = torch.floor((coords - bb_mins_shifted.unsqueeze(1)) / voxel_indicy_denmominator.unsqueeze(1)).int()
+        # print(f"Floor shape: {floor.shape}, Floor data: {floor}")
+        
         voxel_indices = torch.min(floor, self._dims_m_one)
         voxel_indices = torch.max(voxel_indices, self._dims_m_one_zeros)
-
-        # BS x NC x 3
+        # print(f"Voxel indices shape: {voxel_indices.shape}, Voxel indices data: {voxel_indices}")
+        
+        # Initial voxel values (coords)
         voxel_values = coords
+        # print(f"Voxel values (coords) shape: {voxel_values.shape}")
+        
+        # Add features if they exist
         if coord_features is not None:
             voxel_values = torch.cat([voxel_values, coord_features], -1)
-
+            # print(f"Voxel values with features shape: {voxel_values.shape}, Voxel values data: {voxel_values}")
+        
         _, num_coords, _ = voxel_indices.shape
-        # BS x N x (num_batch_dims + 2)
-        all_indices = torch.cat([
-            self._tiled_batch_indices[:, :num_coords], voxel_indices], -1)
-
-        # BS x N x 4
-        voxel_values_pruned_flat = torch.cat(
-            [voxel_values, self._ones_max_coords[:, :num_coords]], -1)
-
-        # BS x x_max x y_max x z_max x 4
+        all_indices = torch.cat([self._tiled_batch_indices[:, :num_coords], voxel_indices], -1)
+        # print(f"All indices shape: {all_indices.shape}, All indices data: {all_indices}")
+        
+        voxel_values_pruned_flat = torch.cat([voxel_values, self._ones_max_coords[:, :num_coords]], -1)
+        # print(f"Voxel values pruned flat shape: {voxel_values_pruned_flat.shape}")
+        
         scattered = self._scatter_nd(
             all_indices.view([-1, 1 + 3]),
             voxel_values_pruned_flat.view(-1, self._voxel_feature_size))
-
+        # print(f"Scattered voxel grid shape: {scattered.shape}")
+        
         vox = scattered[:, 1:-1, 1:-1, 1:-1]
+        # print(f"Voxel grid after trimming edges shape: {vox.shape}")
+        
         if INCLUDE_PER_VOXEL_COORD:
             res_expanded = res.unsqueeze(1).unsqueeze(1).unsqueeze(1)
             res_centre = (res_expanded * self._index_grid) + res_expanded / 2.0
-            coord_positions = (res_centre + bb_mins_shifted.unsqueeze(
-                1).unsqueeze(1).unsqueeze(1))[:, 1:-1, 1:-1, 1:-1]
+            coord_positions = (res_centre + bb_mins_shifted.unsqueeze(1).unsqueeze(1).unsqueeze(1))[:, 1:-1, 1:-1, 1:-1]
             vox = torch.cat([vox[..., :-1], coord_positions, vox[..., -1:]], -1)
-
+            # print(f"Voxel grid with coord positions shape: {vox.shape}")
+        
         occupied = (vox[..., -1:] > 0).float()
-        vox = torch.cat([
-            vox[..., :-1], occupied], -1)
-
-        return torch.cat(
-           [vox[..., :-1], self._index_grid[:, :-2, :-2, :-2] / self._voxel_d,
-            vox[..., -1:]], -1)
-
+        vox = torch.cat([vox[..., :-1], occupied], -1)
+        # print(f"Final voxel grid shape with occupancy: {vox.shape}")
+        
+        final_vox = torch.cat([vox[..., :-1], self._index_grid[:, :-2, :-2, :-2] / self._voxel_d, vox[..., -1:]], -1)
+        # print(f"Final voxel grid shape with index grid: {final_vox.shape}")
+        # 经过体素化后，生成的 3D 体素网格形状为 [1, 100, 100, 100, 10]。
+        # 这个 3D 网格中，每个体素有 10 个特征，包含 XYZ 坐标、RGB 颜色信息、
+        # 体素的中心坐标以及该体素是否被占用的信息。
+        return final_vox

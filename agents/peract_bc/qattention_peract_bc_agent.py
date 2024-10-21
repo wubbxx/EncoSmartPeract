@@ -75,18 +75,18 @@ class QFunction(nn.Module):
         b = rgb_pcd[0][0].shape[0]
         pcd_flat = torch.cat(
             [p.permute(0, 2, 3, 1).reshape(b, -1, 3) for p in pcd], 1)
-
+        # pcd_flat.shape = (1, 65536, 3)
         # flatten RGBs and Pointclouds
         rgb = [rp[0] for rp in rgb_pcd]
         feat_size = rgb[0].shape[1]
         flat_imag_features = torch.cat(
             [p.permute(0, 2, 3, 1).reshape(b, -1, feat_size) for p in rgb], 1)
-
+        # pcd_flat.shape = (1, 65536, 3) 
         # construct voxel grid
         voxel_grid = self._voxelizer.coords_to_bounding_voxel_grid(
             pcd_flat, coord_features=flat_imag_features, coord_bounds=bounds)
 
-        # swap to channels fist
+        # voxel_grid.shape = (1, 100, 100, 100, 10)
         voxel_grid = voxel_grid.permute(0, 4, 1, 2, 3).detach()
 
         # batch bounds if necessary
@@ -299,13 +299,26 @@ class QAttentionPerActBCAgent(Agent):
         obs = []
         pcds = []
         self._crop_summary = []
+
+        # 遍历相机名称，提取每个相机的 RGB 和点云数据
         for n in self._camera_names:
             rgb = replay_sample['%s_rgb' % n]
             pcd = replay_sample['%s_point_cloud' % n]
 
+            # 打印每个相机的 RGB 和点云数据的形状
+            print(f"Camera: {n}")
+            print(f"RGB shape: {rgb.shape}, dtype: {rgb.dtype}")
+            print(f"PCD shape: {pcd.shape}, dtype: {pcd.dtype}")
+
             obs.append([rgb, pcd])
             pcds.append(pcd)
+
+        # 打印生成的 obs 和 pcds 的形状和结构
+        print(f"obs structure: {[(o[0].shape, o[1].shape) for o in obs]}")
+        print(f"pcds structure: {[p.shape for p in pcds]}")
+
         return obs, pcds
+
 
     def _act_preprocess_inputs(self, observation):
         obs, pcds = [], []
@@ -365,7 +378,9 @@ class QAttentionPerActBCAgent(Agent):
         return q_collision_softmax
 
     def update(self, step: int, replay_sample: dict) -> dict:
+        # print(f"action_trans before: {replay_sample['trans_action_indicies']}")
         action_trans = replay_sample['trans_action_indicies'][:, self._layer * 3:self._layer * 3 + 3].int()
+        # print(f"action_trans: {action_trans}")
         action_rot_grip = replay_sample['rot_grip_action_indicies'].int()
         action_gripper_pose = replay_sample['gripper_pose']
         action_ignore_collisions = replay_sample['ignore_collisions'].int()
@@ -389,7 +404,7 @@ class QAttentionPerActBCAgent(Agent):
         # batch size
         bs = pcd[0].shape[0]
 
-        # SE(3) augmentation of point clouds and actions
+        # SE3（特殊欧几里得群）变换和增强
         if self._transform_augmentation:
             action_trans, \
             action_rot_grip, \
@@ -664,7 +679,7 @@ class QAttentionPerActBCAgent(Agent):
                 if '_voxelizer' not in k:
                     logging.warning("key %s not found in checkpoint" % k)
         self._q.load_state_dict(merged_state_dict)
-        print("loaded weights from %s" % weight_file)
+        # print("loaded weights from %s" % weight_file)
 
     def save_weights(self, savedir: str):
         torch.save(

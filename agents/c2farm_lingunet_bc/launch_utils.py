@@ -92,7 +92,7 @@ def create_replay(batch_size: int, timesteps: int,
         )
 
     extra_replay_elements = [
-        ReplayElement('demo', (), np.bool),
+        ReplayElement('demo', (), np.bool_),
     ]
 
     replay_buffer = TaskUniformReplayBuffer(

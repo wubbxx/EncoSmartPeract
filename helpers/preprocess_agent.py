@@ -29,6 +29,7 @@ class PreprocessAgent(Agent):
             else:
                 replay_sample[k] = v.float()
         self._replay_sample = replay_sample
+        # 选定某个任务 然后归一化 rgb 项，变成 shape ：（B, ...）
         return self._pose_agent.update(step, replay_sample)
 
     def act(self, step: int, observation: dict,
