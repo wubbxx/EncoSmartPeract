@@ -23,6 +23,11 @@ import transformers
 from helpers.optim.lamb import Lamb
 
 from torch.nn.parallel import DistributedDataParallel as DDP
+import torchvision.transforms as T
+from odise.modeling.meta_arch.ldm import LdmFeatureExtractor
+import matplotlib.pyplot as plt
+import open3d as o3d
+import numpy as np
 
 NAME = 'QAttentionAgent'
 
@@ -279,6 +284,14 @@ class QAttentionPerActBCAgent(Agent):
             self._voxelizer.to(device)
             self._q.to(device)
 
+        self.diffusion_extractor = LdmFeatureExtractor(
+            encoder_block_indices=(5, 7),
+            unet_block_indices=(2, 5, 8, 11),
+            decoder_block_indices=(2, 5),
+            steps=(0,),
+            captioner=None,
+        )
+
     def _extract_crop(self, pixel_action, observation):
         # Pixel action will now be (B, 2)
         # observation = stack_on_channel(observation)
@@ -300,25 +313,77 @@ class QAttentionPerActBCAgent(Agent):
         pcds = []
         self._crop_summary = []
 
-        # 遍历相机名称，提取每个相机的 RGB 和点云数据
+        output_dir = "/home/wubinxu/peract/"
+        os.makedirs(output_dir, exist_ok=True)  # 创建存储文件的目录
+
         for n in self._camera_names:
             rgb = replay_sample['%s_rgb' % n]
             pcd = replay_sample['%s_point_cloud' % n]
 
-            # 打印每个相机的 RGB 和点云数据的形状
             print(f"Camera: {n}")
             print(f"RGB shape: {rgb.shape}, dtype: {rgb.dtype}")
             print(f"PCD shape: {pcd.shape}, dtype: {pcd.dtype}")
+            gt_rgb = rgb.permute(0, 2, 3, 1)  # 将 (batch_size, channels, height, width) 转换回 (batch_size, height, width, channels)
 
-            obs.append([rgb, pcd])
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            gt_rgb = gt_rgb.to(device)  # 将数据移动到 GPU
+
+            lang_description = replay_sample.get('lang_description', None)
+            diffusion_preprocess = T.Resize(512, antialias=True)
+            batched_input = {'img': diffusion_preprocess(gt_rgb.permute(0, 3, 1, 2)), 'caption': lang_description}
+            feature_list, lang_embed = self.diffusion_extractor(batched_input) # list of visual features, and 77x768 language embedding
+            used_feature_idx = -1  
+            gt_embed = feature_list[used_feature_idx]
+
+            
+            rgb_diffusion = torch.cat([gt_embed, rgb], dim=1)
+            print("Extracted feature shape:", rgb_diffusion.shape)
+            obs.append([rgb_diffusion, pcd])
             pcds.append(pcd)
 
-        # 打印生成的 obs 和 pcds 的形状和结构
+            # 保存RGB图像
+            # rgb_file_path = os.path.join(output_dir, f"{n}_rgb.png")
+            # self.save_rgb(rgb, n, rgb_file_path)
+            
+            # 保存点云为 .ply 文件
+            # pcd_file_path = os.path.join(output_dir, f"{n}_point_cloud.ply")
+            # self.save_point_cloud(pcd, rgb, pcd_file_path)
+
         print(f"obs structure: {[(o[0].shape, o[1].shape) for o in obs]}")
         print(f"pcds structure: {[p.shape for p in pcds]}")
 
         return obs, pcds
 
+    def save_rgb(self, rgb, camera_name, file_path):
+        rgb_image = rgb[0].permute(1, 2, 0).cpu().numpy()
+        
+        # 将值范围归一化为 [0, 1] 以便于保存
+        rgb_image = np.clip((rgb_image + 1) / 2, 0, 1)
+
+        plt.imshow(rgb_image)
+        plt.title(f'RGB Image from {camera_name}')
+        plt.axis('off')
+        
+        # 保存为 PNG 文件
+        plt.savefig(file_path)
+        plt.close()  # 关闭图像以释放内存
+        print(f"RGB image saved to {file_path}")
+
+    def save_point_cloud(self, pcd, rgb, file_path):
+        point_cloud_np = pcd[0].cpu().numpy()  # [3, 128, 128]
+        point_cloud_np = point_cloud_np.reshape(3, -1).T  # 转换为 [N, 3]
+
+        rgb_np = rgb[0].permute(1, 2, 0).cpu().numpy()  # [128, 128, 3]
+        rgb_np = rgb_np.reshape(-1, 3)  # 转换为 [N, 3]
+        
+        # 构建点云对象
+        pcd_open3d = o3d.geometry.PointCloud()
+        pcd_open3d.points = o3d.utility.Vector3dVector(point_cloud_np)
+        pcd_open3d.colors = o3d.utility.Vector3dVector(np.clip((rgb_np + 1) / 2, 0, 1))  # 归一化RGB
+
+        # 保存点云到 .ply 文件
+        o3d.io.write_point_cloud(file_path, pcd_open3d)
+        print(f"Point cloud saved to {file_path}")
 
     def _act_preprocess_inputs(self, observation):
         obs, pcds = [], []
@@ -420,8 +485,7 @@ class QAttentionPerActBCAgent(Agent):
                                          self._voxel_size,
                                          self._rotation_resolution,
                                          self._device)
-
-        # forward pass
+        # 在这里添加Stable Diffusion 和 DinoV2
         q_trans, q_rot_grip, \
         q_collision, \
         voxel_grid = self._q(obs,

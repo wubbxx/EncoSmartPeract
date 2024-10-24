@@ -81,6 +81,8 @@ def create_replay(batch_size: int, timesteps: int,
                       np.float32), # extracted from CLIP's language encoder
         ReplayElement('task', (),
                       str),
+        ReplayElement('lang_description', (),
+                      str),
         ReplayElement('lang_goal', (1,),
                       object),  # language goal string for debugging and visualization
     ])
@@ -202,6 +204,7 @@ def _add_keypoints_to_replay(
             'gripper_pose': obs_tp1.gripper_pose,
             'task': task,
             'lang_goal': np.array([description], dtype=object),
+            'lang_description': description,
         }
 
         # 打印数据类型和shape
@@ -369,7 +372,7 @@ def create_agent(cfg: DictConfig):
             depth=cfg.method.transformer_depth,
             iterations=cfg.method.transformer_iterations,
             voxel_size=vox_size,
-            initial_dim = 3 + 3 + 1 + 3,
+            initial_dim = 3 + 3 + 1 + 3 + 512,
             low_dim_size=4,
             layer=depth,
             num_rotation_classes=num_rotation_classes if last else 0,
@@ -416,7 +419,7 @@ def create_agent(cfg: DictConfig):
             include_low_dim_state=True,
             image_resolution=cam_resolution,
             batch_size=cfg.replay.batch_size,
-            voxel_feature_size=3,
+            voxel_feature_size=3 + 512,
             lambda_weight_l2=cfg.method.lambda_weight_l2,
             num_rotation_classes=num_rotation_classes,
             rotation_resolution=cfg.method.rotation_resolution,

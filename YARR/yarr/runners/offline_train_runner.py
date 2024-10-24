@@ -147,7 +147,8 @@ class OfflineTrainRunner():
 
             # 将数据转移到训练设备上（GPU 或 CPU），并打印转换后的 batch 信息
             batch = {k: v.to(self._train_device) for k, v in sampled_batch.items() if isinstance(v, torch.Tensor)}
-
+            # batch = {k: v.to(self._train_device) for k, v in sampled_batch.items()}
+            batch['lang_description'] = sampled_batch.get('lang_description')
             # print("\nProcessed batch sent to device:")
             # for key, value in batch.items():
             #     print(f"Key: {key}, Type: {type(value)}, Shape: {value.shape}")

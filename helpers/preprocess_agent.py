@@ -23,11 +23,16 @@ class PreprocessAgent(Agent):
     def update(self, step: int, replay_sample: dict) -> dict:
         # Samples are (B, N, ...) where N is number of buffers/tasks. This is a single task setup, so 0 index.
         replay_sample = {k: v[:, 0] if len(v.shape) > 2 else v for k, v in replay_sample.items()}
+
         for k, v in replay_sample.items():
-            if self._norm_rgb and 'rgb' in k:
-                replay_sample[k] = self._norm_rgb_(v)
+            if k == 'lang_description':
+                # 如果 key 是 'lang_description'，保持原样
+                replay_sample[k] = v  # 保持字符串不变
+            elif self._norm_rgb and 'rgb' in k:
+                replay_sample[k] = self._norm_rgb_(v)  # 归一化处理 RGB 数据
             else:
-                replay_sample[k] = v.float()
+                replay_sample[k] = v.float()  # 转换为浮点类型
+
         self._replay_sample = replay_sample
         # 选定某个任务 然后归一化 rgb 项，变成 shape ：（B, ...）
         return self._pose_agent.update(step, replay_sample)

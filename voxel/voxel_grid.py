@@ -146,73 +146,98 @@ class VoxelGrid(nn.Module):
         return flat_scatter.view(self._total_dims_list)
 
     def coords_to_bounding_voxel_grid(self, coords, coord_features=None, coord_bounds=None):
-        # print(f"Initial coords shape: {coords.shape}")
-        # if coord_features is not None:
-        #     print(f"Initial coord_features shape: {coord_features.shape}")
-        # if coord_bounds is not None:
-        #     print(f"Initial coord_bounds shape: {coord_bounds.shape}")
-            
+        # 打印初始输入数据的形状
+        print(f"Initial coords shape: {coords.shape}")
+        if coord_features is not None:
+            print(f"Initial coord_features shape: {coord_features.shape}")
+        if coord_bounds is not None:
+            print(f"Initial coord_bounds shape: {coord_bounds.shape}")
+
+        # 打印初始体素化的关键参数
         voxel_indicy_denmominator = self._voxel_indicy_denmominator
         res, bb_mins = self._res, self._bb_mins
-        # print(f"Initial res: {res}, Initial bb_mins: {bb_mins}")
-        
+        print(f"Initial voxel_indicy_denmominator: {voxel_indicy_denmominator}")
+        print(f"Initial resolution (res): {res}")
+        print(f"Initial bounding box minimums (bb_mins): {bb_mins}")
+
+        # 如果有边界框，调整体素的分辨率和索引计算分母
         if coord_bounds is not None:
             bb_mins = coord_bounds[..., 0:3]
             bb_maxs = coord_bounds[..., 3:6]
             bb_ranges = bb_maxs - bb_mins
             res = bb_ranges / (self._dims_orig.float() + MIN_DENOMINATOR)
             voxel_indicy_denmominator = res + MIN_DENOMINATOR
-            # print(f"Adjusted bb_mins: {bb_mins.shape}, bb_maxs: {bb_maxs.shape}, bb_ranges: {bb_ranges.shape}")
-            # print(f"Adjusted res: {res.shape}, Adjusted voxel_indicy_denmominator: {voxel_indicy_denmominator.shape}")
-        
+            print(f"Adjusted bounding box minimums (bb_mins): {bb_mins}")
+            print(f"Bounding box ranges (bb_ranges): {bb_ranges}")
+            print(f"Adjusted resolution (res): {res}")
+            print(f"Adjusted voxel_indicy_denmominator: {voxel_indicy_denmominator}")
+
+        # 计算平移后的包围盒最小值
         bb_mins_shifted = bb_mins - res  # shift back by one
-        # print(f"Shifted bb_mins: {bb_mins_shifted.shape}")
-        
+        print(f"Shifted bounding box minimums (bb_mins_shifted): {bb_mins_shifted}")
+
+        # 计算每个点的体素索引
         floor = torch.floor((coords - bb_mins_shifted.unsqueeze(1)) / voxel_indicy_denmominator.unsqueeze(1)).int()
-        # print(f"Floor shape: {floor.shape}, Floor data: {floor}")
-        
+        print(f"Calculated floor (voxel indices before clipping) shape: {floor.shape}, data: {floor}")
+
+        # 将体素索引裁剪到有效范围
         voxel_indices = torch.min(floor, self._dims_m_one)
         voxel_indices = torch.max(voxel_indices, self._dims_m_one_zeros)
-        # print(f"Voxel indices shape: {voxel_indices.shape}, Voxel indices data: {voxel_indices}")
-        
-        # Initial voxel values (coords)
+        print(f"Clipped voxel indices shape: {voxel_indices.shape}, data: {voxel_indices}")
+
+        # 初始化体素的值为原始坐标
         voxel_values = coords
-        # print(f"Voxel values (coords) shape: {voxel_values.shape}")
-        
-        # Add features if they exist
+        print(f"Voxel values (initial coords) shape: {voxel_values.shape}")
+
+        # 如果有附加特征，将其添加到体素值中
         if coord_features is not None:
             voxel_values = torch.cat([voxel_values, coord_features], -1)
-            # print(f"Voxel values with features shape: {voxel_values.shape}, Voxel values data: {voxel_values}")
-        
+            print(f"Voxel values with features shape: {voxel_values.shape}")
+
+        # 获取体素的总数量并准备将体素索引和批处理索引组合
         _, num_coords, _ = voxel_indices.shape
+        print(f"Number of coordinates (num_coords): {num_coords}")
+
         all_indices = torch.cat([self._tiled_batch_indices[:, :num_coords], voxel_indices], -1)
-        # print(f"All indices shape: {all_indices.shape}, All indices data: {all_indices}")
-        
+        print(f"All indices shape (with batch indices): {all_indices.shape}, data: {all_indices}")
+
+        # 将坐标和其他信息拼接成体素值
         voxel_values_pruned_flat = torch.cat([voxel_values, self._ones_max_coords[:, :num_coords]], -1)
-        # print(f"Voxel values pruned flat shape: {voxel_values_pruned_flat.shape}")
-        
+        print(f"Voxel values pruned flat shape: {voxel_values_pruned_flat.shape}")
+
+        # 使用 scatter_nd 操作将体素值插入到 3D 网格中
         scattered = self._scatter_nd(
-            all_indices.view([-1, 1 + 3]),
-            voxel_values_pruned_flat.view(-1, self._voxel_feature_size))
-        # print(f"Scattered voxel grid shape: {scattered.shape}")
-        
+            all_indices.view([-1, 1 + 3]),  # 扁平化索引
+            voxel_values_pruned_flat.view(-1, self._voxel_feature_size)  # 扁平化体素值
+        )
+        print(f"Scattered voxel grid shape (before trimming): {scattered.shape}")
+
+        # 修剪体素网格的边缘
         vox = scattered[:, 1:-1, 1:-1, 1:-1]
-        # print(f"Voxel grid after trimming edges shape: {vox.shape}")
-        
+        print(f"Trimmed voxel grid shape: {vox.shape}")
+
+        # 如果启用了 INCLUDE_PER_VOXEL_COORD，则将每个体素的中心坐标添加为特征
         if INCLUDE_PER_VOXEL_COORD:
             res_expanded = res.unsqueeze(1).unsqueeze(1).unsqueeze(1)
             res_centre = (res_expanded * self._index_grid) + res_expanded / 2.0
             coord_positions = (res_centre + bb_mins_shifted.unsqueeze(1).unsqueeze(1).unsqueeze(1))[:, 1:-1, 1:-1, 1:-1]
             vox = torch.cat([vox[..., :-1], coord_positions, vox[..., -1:]], -1)
-            # print(f"Voxel grid with coord positions shape: {vox.shape}")
-        
+            print(f"Voxel grid with coord positions shape: {vox.shape}")
+
+        # 计算每个体素是否被占用
         occupied = (vox[..., -1:] > 0).float()
         vox = torch.cat([vox[..., :-1], occupied], -1)
-        # print(f"Final voxel grid shape with occupancy: {vox.shape}")
-        
+        print(f"Final voxel grid with occupancy shape: {vox.shape}")
+
+        # 添加体素索引网格信息并返回最终的体素网格
         final_vox = torch.cat([vox[..., :-1], self._index_grid[:, :-2, :-2, :-2] / self._voxel_d, vox[..., -1:]], -1)
+        print(f"Final voxel grid shape with index grid: {final_vox.shape}")
+        
+        # 返回最终生成的体素网格
+        return final_vox
+
         # print(f"Final voxel grid shape with index grid: {final_vox.shape}")
         # 经过体素化后，生成的 3D 体素网格形状为 [1, 100, 100, 100, 10]。
         # 这个 3D 网格中，每个体素有 10 个特征，包含 XYZ 坐标、RGB 颜色信息、
         # 体素的中心坐标以及该体素是否被占用的信息。
-        return final_vox
+        # return final_vox
