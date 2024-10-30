@@ -28,6 +28,8 @@ from odise.modeling.meta_arch.ldm import LdmFeatureExtractor
 import matplotlib.pyplot as plt
 import open3d as o3d
 import numpy as np
+from PIL import Image, ImageOps
+import requests
 
 NAME = 'QAttentionAgent'
 
@@ -291,6 +293,11 @@ class QAttentionPerActBCAgent(Agent):
             steps=(0,),
             captioner=None,
         )
+        # 下载和加载模型
+        # Load and initialize DINO v2 model
+        self.dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14').to(self._device)
+        self.dinov2.eval()  # Set to evaluation mode
+
 
     def _extract_crop(self, pixel_action, observation):
         # Pixel action will now be (B, 2)
@@ -329,14 +336,24 @@ class QAttentionPerActBCAgent(Agent):
             gt_rgb = gt_rgb.to(device)  # 将数据移动到 GPU
 
             lang_description = replay_sample.get('lang_description', None)
+            caption = None
+            if isinstance(lang_description, list):
+                caption = ['a robot arm ' + cap.item() for cap in lang_description]
+            else:
+                caption = "a robot arm " + lang_description.item()
             diffusion_preprocess = T.Resize(512, antialias=True)
-            batched_input = {'img': diffusion_preprocess(gt_rgb.permute(0, 3, 1, 2)), 'caption': lang_description}
+            batched_input = {'img': diffusion_preprocess(gt_rgb.permute(0, 3, 1, 2)), 'caption': caption}
             feature_list, lang_embed = self.diffusion_extractor(batched_input) # list of visual features, and 77x768 language embedding
             used_feature_idx = -1  
-            gt_embed = feature_list[used_feature_idx]
+            stable_diffusion_feature = feature_list[used_feature_idx]
+            print("stable_diffusion_feature: ", stable_diffusion_feature.shape)
 
-            
-            rgb_diffusion = torch.cat([gt_embed, rgb], dim=1)
+            gt_rgb = gt_rgb.permute(0, 3, 1, 2)  # 调整为 (1, 3, 128, 128)
+            gt_rgb_resized = F.interpolate(gt_rgb, size=(224, 224), mode='bilinear', align_corners=False)
+            dinov2_features = self.dinov2(gt_rgb_resized)
+            print("dinov2：", dinov2_features.shape)
+
+            rgb_diffusion = torch.cat([stable_diffusion_feature, rgb], dim=1)
             print("Extracted feature shape:", rgb_diffusion.shape)
             obs.append([rgb_diffusion, pcd])
             pcds.append(pcd)
@@ -345,7 +362,7 @@ class QAttentionPerActBCAgent(Agent):
             # rgb_file_path = os.path.join(output_dir, f"{n}_rgb.png")
             # self.save_rgb(rgb, n, rgb_file_path)
             
-            # 保存点云为 .ply 文件
+            # # 保存点云为 .ply 文件
             # pcd_file_path = os.path.join(output_dir, f"{n}_point_cloud.ply")
             # self.save_point_cloud(pcd, rgb, pcd_file_path)
 
