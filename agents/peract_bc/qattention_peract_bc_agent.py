@@ -30,6 +30,8 @@ import open3d as o3d
 import numpy as np
 from PIL import Image, ImageOps
 import requests
+from dinov2.models.vision_transformer import DinoVisionTransformer
+
 
 NAME = 'QAttentionAgent'
 
@@ -286,6 +288,10 @@ class QAttentionPerActBCAgent(Agent):
             self._voxelizer.to(device)
             self._q.to(device)
 
+        # model_path = '/home/wubinxu/.cache/torch/hub/checkpoints/dinov2_vitb14_pretrain.pth'
+        self.dinov2 = DinoVisionTransformer().to(self._device)  # 创建模型实例
+        self.dinov2.eval()  # 设置为评估模式
+
         self.diffusion_extractor = LdmFeatureExtractor(
             encoder_block_indices=(5, 7),
             unet_block_indices=(2, 5, 8, 11),
@@ -293,11 +299,6 @@ class QAttentionPerActBCAgent(Agent):
             steps=(0,),
             captioner=None,
         )
-        # 下载和加载模型
-        # Load and initialize DINO v2 model
-        self.dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14').to(self._device)
-        self.dinov2.eval()  # Set to evaluation mode
-
 
     def _extract_crop(self, pixel_action, observation):
         # Pixel action will now be (B, 2)
@@ -351,8 +352,12 @@ class QAttentionPerActBCAgent(Agent):
             gt_rgb = gt_rgb.permute(0, 3, 1, 2)  # 调整为 (1, 3, 128, 128)
             gt_rgb_resized = F.interpolate(gt_rgb, size=(224, 224), mode='bilinear', align_corners=False)
             dinov2_features = self.dinov2(gt_rgb_resized)
-            print("dinov2：", dinov2_features.shape)
-
+            for key, value in dinov2_features.items():
+                if isinstance(value, torch.Tensor):
+                    print(f"{key} 的形状：{value.shape}")
+                    print(f"{key} 的内容：{value}")
+                else:
+                    print(f"{key} 的内容：{value}")
             rgb_diffusion = torch.cat([stable_diffusion_feature, rgb], dim=1)
             print("Extracted feature shape:", rgb_diffusion.shape)
             obs.append([rgb_diffusion, pcd])
